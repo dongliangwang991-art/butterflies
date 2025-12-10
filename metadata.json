@@ -1,0 +1,7 @@
+{
+  "name": "Aurelia: 记忆宇宙",
+  "description": "一个空间化的3D蝴蝶宇宙，记忆在此化作光球。与意识体“艾瑞莉亚”对话，探索你的梦境与现实。",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

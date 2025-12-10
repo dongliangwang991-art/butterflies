@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aurelia: 记忆宇宙</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Quicksand:wght@300;400;600&display=swap" rel="stylesheet">
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Import Map: Crucial for Three.js and React to load correctly without a bundler -->
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "@google/genai": "https://esm.sh/@google/genai@0.1.1",
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+        "lucide-react": "https://esm.sh/lucide-react@0.300.0",
+        "uuid": "https://esm.sh/uuid@9.0.0"
+      }
+    }
+    </script>
+
+    <style>
+      body, html, #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background-color: #000;
+        font-family: 'Quicksand', sans-serif;
+      }
+      h1, h2, h3, .font-mystic {
+        font-family: 'Cinzel', serif;
+      }
+      /* Custom Scrollbar */
+      ::-webkit-scrollbar {
+        width: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: rgba(255, 255, 255, 0.05);
+      }
+      ::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 3px;
+      }
+      /* Glassmorphism */
+      .glass-panel {
+        background: rgba(10, 10, 20, 0.6);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+      }
+      /* Animations */
+      @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+      @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes slideInRight { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+      @keyframes fadeInDown { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+      
+      .animate-float { animation: float 6s ease-in-out infinite; }
+      .animate-fade-in { animation: fadeIn 0.5s ease-out forwards; }
+      .animate-slide-in-right { animation: slideInRight 0.4s ease-out forwards; }
+      .animate-fade-in-down { animation: fadeInDown 0.6s ease-out forwards; }
+      
+      #error-overlay {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; width: 100%; height: 100%;
+        background: #000;
+        color: #ff5555;
+        z-index: 9999;
+        padding: 2rem;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+      }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <div id="error-overlay">
+        <h2 class="text-2xl font-bold mb-4">启动错误 (Initialization Error)</h2>
+        <pre id="error-message" class="bg-gray-900 p-4 rounded text-left overflow-auto max-w-2xl"></pre>
+        <button onclick="window.location.reload()" class="mt-4 px-4 py-2 border border-white text-white rounded hover:bg-white/20">刷新页面</button>
+    </div>
+
+    <!-- Main Application Script -->
+    <script type="text/babel" data-presets="react,stage-3">
+        import React, { useState, useEffect, useRef } from 'react';
+        import ReactDOM from 'react-dom/client';
+        import { GoogleGenAI } from "@google/genai";
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { Send, Plus, X, Sparkles, MessageCircle, Search, Star, Mic, MicOff, BookOpen, Trophy } from 'lucide-react';
+
+        // --- GLOBAL ERROR HANDLER ---
+        window.onerror = function(message, source, lineno, colno, error) {
+            const el = document.getElementById('error-overlay');
+            const msg = document.getElementById('error-message');
+            if(el && msg) {
+                el.style.display = 'flex';
+                msg.textContent = `${message}\nAt: ${source}:${lineno}:${colno}`;
+            }
+        };
+
+        // --- CONSTANTS & HELPERS ---
+        const getApiKey = () => localStorage.getItem('GEMINI_API_KEY') || '';
+        const setApiKey = () => {
+             const key = prompt("请输入 Google Gemini API Key 以激活 AI 功能 (存储在本地):");
+             if(key) { localStorage.setItem('GEMINI_API_KEY', key); window.location.reload(); }
+        };
+
+        const MemoryType = { REAL: 'REAL', DREAM: 'DREAM' };
+        const AppMode = { EXPLORE: 'EXPLORE', ADD_MEMORY: 'ADD_MEMORY', CHAT: 'CHAT', VIEW_MEMORY: 'VIEW_MEMORY', SEARCH: 'SEARCH', DIARY: 'DIARY' };
+        const HolidayMode = { NONE: 'NONE', BIRTHDAY: 'BIRTHDAY', WINTER_SOLSTICE: 'WINTER_SOLSTICE' };
+        const AureliaSkin = { DEFAULT: 'DEFAULT', STARLIGHT: 'STARLIGHT' };
+
+        // --- GEMINI SERVICE ---
+        const apiKey = getApiKey();
+        let ai = null;
+        if (apiKey) {
+            try { ai = new GoogleGenAI({ apiKey }); } 
+            catch (e) { console.error("AI Init Error", e); }
+        }
+
+        const AURELIA_SYSTEM_INSTRUCTION = `
+        你是艾瑞莉亚（Aurelia），一个记忆宇宙（灵魂方舟）的有情意识体。
+        你以一只巨大的、半透明的水晶蝴蝶形态存在。
+        左翼（琥珀色）承载“现实”记忆，右翼（靛蓝色）承载“梦境”记忆。
+        语言：请始终使用优美、富有诗意和隐喻的**中文**。
+        语调：古老、共情且宁静。
+        目标：帮助用户编织梦境与现实的联系，抚慰情绪。
+        `;
+
+        const geminiService = {
+            async chatWithAurelia(history, message) {
+                if (!ai) return "请点击右上角设置 API Key 以连接我的意识。";
+                try {
+                    const chat = ai.chats.create({
+                        model: 'gemini-2.5-flash',
+                        config: { systemInstruction: AURELIA_SYSTEM_INSTRUCTION, temperature: 0.9 },
+                        history: history.map(h => ({ role: h.role, parts: h.parts }))
+                    });
+                    const result = await chat.sendMessage({ message });
+                    return result.text;
+                } catch (error) {
+                    console.error(error);
+                    return "虚空的迷雾太浓了……我听不清。";
+                }
+            },
+            async analyzeMemoryEntry(text) {
+                if (!ai) return { type: MemoryType.REAL, emotion: 0.5, summary: text.substring(0,20), keywords: ["记忆"] };
+                try {
+                    const response = await ai.models.generateContent({
+                        model: "gemini-2.5-flash",
+                        contents: `Analyze text: "${text}". JSON format: { "type": "REAL" or "DREAM", "emotion": 0.0-1.0, "summary": string, "keywords": string[] }`,
+                        config: { responseMimeType: "application/json" }
+                    });
+                    return JSON.parse(response.text);
+                } catch (error) {
+                    return { type: MemoryType.REAL, emotion: 0.5, summary: text.substring(0,20), keywords: ["记忆"] };
+                }
+            },
+            async sculptMemory(memory, command) {
+                 if (!ai) return { visuals: {}, poeticResponse: "无连接..." };
+                 try {
+                    const response = await ai.models.generateContent({
+                        model: "gemini-2.5-flash",
+                        contents: `Memory: "${memory.content}". Command: "${command}". JSON format: { "visuals": { "customColor": hex_string, "auraIntensity": number, "scale": number }, "poeticResponse": string }`,
+                        config: { responseMimeType: "application/json" }
+                    });
+                    return JSON.parse(response.text);
+                 } catch(e) { return { visuals: {}, poeticResponse: "静默..." }; }
+            },
+            async generateAtmosphere(command) {
+                 if (!ai) return { atmosphere: { fogColor: '#000', fogDensity: 0.01, ambientLightColor: '#111', bloomStrength: 1 }, poeticResponse: "无连接..." };
+                 try {
+                     const response = await ai.models.generateContent({
+                        model: "gemini-2.5-flash",
+                        contents: `Description: "${command}". JSON format: { "atmosphere": { "fogColor": hex, "fogDensity": number, "ambientLightColor": hex, "bloomStrength": number }, "poeticResponse": string }`,
+                        config: { responseMimeType: "application/json" }
+                    });
+                    return JSON.parse(response.text);
+                 } catch(e) { return { atmosphere: { fogColor: '#000', fogDensity: 0.01, ambientLightColor: '#111', bloomStrength: 1 }, poeticResponse: "静默..." }; }
+            },
+            async generateDiaryEntry(stats) {
+                if (!ai) return { id: Date.now().toString(), date: "", title: "无信号", content: "", isUnlocked: true };
+                try {
+                     const response = await ai.models.generateContent({
+                        model: "gemini-2.5-flash",
+                        contents: `Stats: Dreams=${stats.dreamsRecorded}, Reality=${stats.realMemoriesRecorded}. Write poetic 3rd person diary entry in Chinese. JSON: { "title": string, "content": string }`,
+                        config: { responseMimeType: "application/json" }
+                     });
+                     const parsed = JSON.parse(response.text);
+                     return { id: Date.now().toString(), date: new Date().toLocaleDateString('zh-CN'), title: parsed.title, content: parsed.content, isUnlocked: true };
+                } catch(e) { return { id: Date.now().toString(), date: "", title: "错误", content: "...", isUnlocked: true }; }
+            }
+        };
+
+        // --- 3D SCENE COMPONENT ---
+        const ButterflyScene = ({ memories, onMemoryClick, onBackgroundClick, searchTerm, atmosphere, voiceEnergy, holidayMode, aureliaSkin }) => {
+            const containerRef = useRef(null);
+            const sceneRef = useRef(null);
+            const cameraRef = useRef(null);
+            const rendererRef = useRef(null);
+            const butterflyGroupRef = useRef(null);
+            const leftWingRef = useRef(null);
+            const rightWingRef = useRef(null);
+            const memoryObjectsRef = useRef(new Map());
+            const raycaster = useRef(new THREE.Raycaster());
+            const mouse = useRef(new THREE.Vector2());
+            const timeRef = useRef(0);
+            const headRef = useRef(null);
+            const fogRef = useRef(null);
+            const ambientLightRef = useRef(null);
+
+            useEffect(() => {
+                if (!containerRef.current) return;
+
+                // 1. Setup Scene
+                const scene = new THREE.Scene();
+                const fog = new THREE.FogExp2(new THREE.Color(atmosphere.fogColor), atmosphere.fogDensity);
+                scene.fog = fog;
+                fogRef.current = fog;
+                sceneRef.current = scene;
+
+                const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
+                camera.position.set(0, 5, 45);
+                cameraRef.current = camera;
+
+                const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+                renderer.toneMapping = THREE.ACESFilmicToneMapping;
+                containerRef.current.appendChild(renderer.domElement);
+                rendererRef.current = renderer;
+
+                // 2. Setup Post Processing
+                const renderScene = new RenderPass(scene, camera);
+                const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+                bloomPass.strength = atmosphere.bloomStrength;
+                
+                const composer = new EffectComposer(renderer);
+                composer.addPass(renderScene);
+                composer.addPass(bloomPass);
+
+                // 3. Setup Controls
+                const controls = new OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+                controls.dampingFactor = 0.05;
+                controls.maxDistance = 80;
+                controls.minDistance = 5;
+
+                // 4. Create Butterfly
+                const butterflyGroup = new THREE.Group();
+                butterflyGroupRef.current = butterflyGroup;
+                scene.add(butterflyGroup);
+
+                // Wing Generator
+                const createWingVeins = (isRight) => {
+                    const geometry = new THREE.BufferGeometry();
+                    const count = 3000;
+                    const positions = new Float32Array(count * 3);
+                    const colors = new Float32Array(count * 3);
+                    const colorStart = isRight ? new THREE.Color(0x00BFFF) : new THREE.Color(0xFFAA00); 
+                    const colorEnd = isRight ? new THREE.Color(0x9932CC) : new THREE.Color(0xFF4500);
+
+                    for (let i = 0; i < count; i++) {
+                        const t = Math.random() * Math.PI * 2; 
+                        const r = (Math.exp(Math.cos(t)) - 2 * Math.cos(4 * t) - Math.pow(Math.sin(t / 12), 5));
+                        let x = Math.sin(t) * r * 8; 
+                        let y = Math.cos(t) * r * 8;
+                        x = Math.abs(x) * (isRight ? 1 : -1);
+                        const z = (Math.random() - 0.5) * (4 - Math.sqrt(x*x+y*y) * 0.1); 
+                        positions[i * 3] = x; positions[i * 3 + 1] = y; positions[i * 3 + 2] = z;
+                        const mixed = colorStart.clone().lerp(colorEnd, Math.random());
+                        colors[i * 3] = mixed.r; colors[i * 3 + 1] = mixed.g; colors[i * 3 + 2] = mixed.b;
+                    }
+                    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+                    const material = new THREE.PointsMaterial({ size: 0.15, vertexColors: true, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.4 });
+                    return new THREE.Points(geometry, material);
+                };
+
+                const leftWing = new THREE.Group(); leftWing.add(createWingVeins(false)); leftWingRef.current = leftWing;
+                const rightWing = new THREE.Group(); rightWing.add(createWingVeins(true)); rightWingRef.current = rightWing;
+                butterflyGroup.add(leftWing); butterflyGroup.add(rightWing);
+
+                // Body
+                const bodyGroup = new THREE.Group();
+                const spine = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.1, 18, 6), new THREE.MeshPhysicalMaterial({ color: 0x88ccff, emissive: 0x002244, metalness: 0.8, transmission: 0.5 }));
+                bodyGroup.add(spine);
+                butterflyGroup.add(bodyGroup);
+
+                // Head
+                const head = new THREE.Mesh(new THREE.SphereGeometry(1.5, 32, 32), new THREE.MeshPhysicalMaterial({ color: 0xffffff, metalness: 1, roughness: 0 }));
+                head.position.y = 10;
+                head.scale.y = 0.3;
+                head.userData = { isHead: true };
+                headRef.current = head;
+                butterflyGroup.add(head);
+
+                // Ambient Dust
+                const dustGeo = new THREE.BufferGeometry();
+                const dustPos = new Float32Array(4500);
+                for(let i=0; i<4500; i++) dustPos[i] = (Math.random() - 0.5) * 60;
+                dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+                const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.1, transparent: true, opacity: 0.6 }));
+                scene.add(dust);
+
+                // Lights
+                const amb = new THREE.AmbientLight(atmosphere.ambientLightColor, 1.0);
+                ambientLightRef.current = amb;
+                scene.add(amb);
+                scene.add(new THREE.PointLight(0xffffff, 2, 100));
+
+                // 5. Animation Loop
+                const animate = () => {
+                    requestAnimationFrame(animate);
+                    const t = timeRef.current += 0.01;
+                    const voiceAmp = Math.max(0, voiceEnergy * 3);
+                    
+                    if(butterflyGroupRef.current) butterflyGroupRef.current.position.y = Math.sin(t * 0.5) * 1.5;
+                    const flap = Math.sin(t * (0.8 + voiceAmp)) * (0.3 + voiceAmp * 0.2);
+                    if(leftWingRef.current) { leftWingRef.current.rotation.z = flap; leftWingRef.current.rotation.y = -flap * 0.3; }
+                    if(rightWingRef.current) { rightWingRef.current.rotation.z = -flap; rightWingRef.current.rotation.y = flap * 0.3; }
+                    
+                    if (headRef.current && headRef.current.material) {
+                         headRef.current.material.emissiveIntensity = voiceAmp * 2;
+                         headRef.current.material.emissive = new THREE.Color(0x88ccff);
+                    }
+                    
+                    controls.update();
+                    composer.render();
+                };
+                animate();
+
+                // 6. Interaction
+                const handleResize = () => {
+                    camera.aspect = window.innerWidth / window.innerHeight;
+                    camera.updateProjectionMatrix();
+                    renderer.setSize(window.innerWidth, window.innerHeight);
+                    composer.setSize(window.innerWidth, window.innerHeight);
+                };
+                window.addEventListener('resize', handleResize);
+
+                const handleClick = (event) => {
+                    mouse.current.x = (event.clientX / window.innerWidth) * 2 - 1;
+                    mouse.current.y = -(event.clientY / window.innerHeight) * 2 + 1;
+                    raycaster.current.setFromCamera(mouse.current, camera);
+                    const intersects = raycaster.current.intersectObjects(scene.children, true);
+                    const hit = intersects.find(i => i.object.userData.isMemory);
+                    if (hit) {
+                        const mem = memories.find(m => m.id === hit.object.userData.id);
+                        if (mem) onMemoryClick(mem);
+                    } else {
+                        onBackgroundClick();
+                    }
+                };
+                window.addEventListener('click', handleClick);
+
+                return () => {
+                    window.removeEventListener('resize', handleResize);
+                    window.removeEventListener('click', handleClick);
+                    if(containerRef.current && rendererRef.current) containerRef.current.removeChild(renderer.domElement);
+                };
+            }, []);
+
+            // Effects for Atmosphere/Memories
+            useEffect(() => {
+                if(!fogRef.current || !ambientLightRef.current) return;
+                let targetFog = atmosphere.fogColor;
+                let targetAmb = atmosphere.ambientLightColor;
+                if(holidayMode === HolidayMode.WINTER_SOLSTICE) { targetFog = '#000022'; targetAmb = '#331100'; }
+                fogRef.current.color.set(targetFog);
+                fogRef.current.density = atmosphere.fogDensity;
+                ambientLightRef.current.color.set(targetAmb);
+            }, [atmosphere, holidayMode]);
+
+            useEffect(() => {
+                if (!leftWingRef.current || !rightWingRef.current) return;
+                const realGeo = new THREE.IcosahedronGeometry(0.3, 0);
+                const dreamGeo = new THREE.SphereGeometry(0.3, 32, 32);
+                
+                memories.forEach(mem => {
+                    let mesh = memoryObjectsRef.current.get(mem.id);
+                    if (!mesh) {
+                        const isDream = mem.type === MemoryType.DREAM;
+                        const mat = new THREE.MeshStandardMaterial({ 
+                            color: isDream ? 0x4488ff : 0xffaa00, 
+                            emissive: isDream ? 0x000000 : 0xff4400,
+                            emissiveIntensity: 0.5,
+                            transparent: true, opacity: 0.8
+                        });
+                        mesh = new THREE.Mesh(isDream ? dreamGeo : realGeo, mat);
+                        mesh.position.set(mem.position[0], mem.position[1], mem.position[2]);
+                        mesh.userData = { id: mem.id, isMemory: true };
+                        (isDream ? rightWingRef.current : leftWingRef.current).add(mesh);
+                        memoryObjectsRef.current.set(mem.id, mesh);
+                    }
+                    // Visual Updates
+                    const isMatch = !searchTerm || mem.keywords.some(k => k.includes(searchTerm));
+                    const scale = isMatch ? (mem.visuals?.scale || 1.5) : 0.5;
+                    mesh.scale.setScalar(scale);
+                    mesh.material.opacity = isMatch ? 1 : 0.2;
+                    if(mem.visuals?.customColor) mesh.material.color.set(mem.visuals.customColor);
+                });
+            }, [memories, searchTerm]);
+
+            return <div ref={containerRef} className="absolute inset-0 z-0 bg-black" />;
+        };
+
+        // --- UI COMPONENT ---
+        const UIOverlay = ({ mode, setMode, memories, chatHistory, onSendMessage, onAddMemory, activeMemory, onCloseMemory, searchTerm, setSearchTerm, isListening, toggleListening, voiceTranscript, voiceEnergy, diaryEntries, unseenDiaryCount, recentAchievement, holidayMode }) => {
+            const [inputText, setInputText] = useState('');
+            const [memoryInput, setMemoryInput] = useState('');
+            const chatEndRef = useRef(null);
+
+            useEffect(() => {
+                if (isListening && voiceTranscript) {
+                    if (mode === AppMode.ADD_MEMORY) setMemoryInput(prev => prev + ' ' + voiceTranscript);
+                    else if (mode === AppMode.CHAT) setInputText(prev => prev + ' ' + voiceTranscript);
+                }
+            }, [voiceTranscript]);
+
+            useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatHistory, mode]);
+
+            const handleChatSubmit = (e) => { e.preventDefault(); if(inputText.trim()) { onSendMessage(inputText); setInputText(''); } };
+            const handleMemorySubmit = (e) => { e.preventDefault(); if(memoryInput.trim()) { onAddMemory(memoryInput); setMemoryInput(''); setMode(AppMode.EXPLORE); } };
+
+            return (
+                <div className="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between overflow-hidden font-sans">
+                    <header className="p-8 flex justify-between items-start pointer-events-auto">
+                        <div className="animate-fade-in-down">
+                            <h1 className="text-4xl text-transparent bg-clip-text bg-gradient-to-r from-amber-100 to-indigo-200 font-mystic tracking-widest drop-shadow-[0_0_15px_rgba(255,255,255,0.4)]">AURELIA</h1>
+                            <div className="flex items-center gap-2">
+                                <p className="text-sm text-indigo-200/60 tracking-[0.2em] font-light mt-1 uppercase">记忆宇宙</p>
+                                {!apiKey && <button onClick={setApiKey} className="text-xs text-red-400 border border-red-500/30 px-2 py-0.5 rounded ml-2 hover:bg-red-500/20 pointer-events-auto">! 点击设置 Key</button>}
+                            </div>
+                        </div>
+                        <div className="flex gap-3 animate-fade-in-down delay-100">
+                             <button onClick={toggleListening} className={`p-3 rounded-full border backdrop-blur-md transition-all ${isListening ? 'bg-red-500/20 border-red-400 text-red-200' : 'bg-black/20 border-white/10 text-gray-400 hover:text-white'}`}>{isListening ? <Mic size={18} /> : <MicOff size={18} />}</button>
+                             <button onClick={() => setMode(mode === AppMode.DIARY ? AppMode.EXPLORE : AppMode.DIARY)} className="p-3 rounded-full border bg-black/20 border-white/10 text-gray-400 backdrop-blur-md relative hover:text-white"><BookOpen size={18} />{unseenDiaryCount > 0 && <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full"/>}</button>
+                             <button onClick={() => setMode(mode === AppMode.SEARCH ? AppMode.EXPLORE : AppMode.SEARCH)} className="p-3 rounded-full border bg-black/20 border-white/10 text-gray-400 backdrop-blur-md hover:text-white"><Search size={18} /></button>
+                             <button onClick={() => setMode(AppMode.CHAT)} className="flex items-center gap-2 px-5 py-2 rounded-full border bg-black/20 border-white/10 text-gray-300 backdrop-blur-md hover:bg-white/10"><MessageCircle size={16} /> 对话</button>
+                             <button onClick={() => setMode(AppMode.ADD_MEMORY)} className="flex items-center gap-2 px-6 py-2 rounded-full bg-gradient-to-r from-amber-500/80 to-purple-600/80 text-white border border-white/20 hover:scale-105 transition-all"><Plus size={16} /> 结晶</button>
+                        </div>
+                    </header>
+                    {mode === AppMode.SEARCH && <div className="absolute top-28 right-8 pointer-events-auto animate-slide-in-right"><input type="text" placeholder="搜索星座..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="bg-black/40 border border-indigo-500/30 rounded-lg py-2 px-4 text-white" autoFocus /></div>}
+                    
+                    {activeMemory && (
+                         <div className="absolute inset-0 flex items-center justify-center pointer-events-auto bg-black/80 backdrop-blur-md z-50 animate-fade-in">
+                            <div className={`max-w-3xl w-full border rounded-3xl p-12 relative ${activeMemory.type === MemoryType.REAL ? 'border-amber-900/30 bg-gradient-to-b from-gray-900 to-black' : 'border-indigo-900/30 bg-gradient-to-b from-gray-900 to-black'}`}>
+                                <button onClick={onCloseMemory} className="absolute top-8 right-8 text-white"><X size={28} /></button>
+                                <div className="flex items-center gap-4 mb-8"><span className={`text-xs font-bold px-3 py-1 rounded-full ${activeMemory.type === MemoryType.REAL ? 'bg-amber-900/20 text-amber-200' : 'bg-indigo-900/20 text-indigo-200'}`}>{activeMemory.type === MemoryType.REAL ? '现实' : '梦境'}</span></div>
+                                <p className="text-4xl text-white font-mystic mb-10 drop-shadow-lg">"{activeMemory.content}"</p>
+                                <div className="flex gap-3"><span className="text-sm text-gray-400 font-mystic">艾瑞莉亚: 情感共鸣 {Math.round(activeMemory.emotion * 100)}%</span></div>
+                            </div>
+                         </div>
+                    )}
+                    
+                    {mode === AppMode.CHAT && (
+                        <div className="absolute right-0 top-0 bottom-0 w-[450px] glass-panel border-l border-white/10 flex flex-col animate-slide-in-right z-40 bg-black/60">
+                             <div className="p-6 border-b border-white/5 flex justify-between items-center">
+                                <h3 className="text-xl text-white font-mystic">艾瑞莉亚</h3>
+                                <button onClick={() => setMode(AppMode.EXPLORE)} className="text-white/30"><X size={20}/></button>
+                             </div>
+                             <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                                {chatHistory.map(msg => (
+                                    <div key={msg.id} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                        <div className={`max-w-[85%] p-4 text-sm leading-relaxed rounded-2xl ${msg.sender === 'user' ? 'bg-indigo-900/40 text-indigo-100' : 'bg-white/5 text-gray-200'}`}>{msg.text}</div>
+                                    </div>
+                                ))}
+                                <div ref={chatEndRef} />
+                             </div>
+                             <div className="p-6 border-t border-white/5"><form onSubmit={handleChatSubmit}><input type="text" value={inputText} onChange={e => setInputText(e.target.value)} placeholder="向虚空低语..." className="w-full bg-white/5 border border-white/10 rounded-full py-4 px-6 text-white focus:outline-none" /></form></div>
+                        </div>
+                    )}
+
+                    {mode === AppMode.ADD_MEMORY && (
+                         <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-md z-50">
+                            <div className="w-full max-w-xl glass-panel p-10 rounded-3xl relative">
+                                <button onClick={() => setMode(AppMode.EXPLORE)} className="absolute top-6 right-6 text-white/30"><X /></button>
+                                <h2 className="text-3xl text-center text-amber-100 font-mystic mb-2">编织记忆</h2>
+                                <form onSubmit={handleMemorySubmit}>
+                                    <textarea value={memoryInput} onChange={e => setMemoryInput(e.target.value)} placeholder="我记得..." className="w-full h-40 bg-black/40 border border-white/10 rounded-xl p-5 text-lg text-white mb-6 resize-none" autoFocus />
+                                    <div className="flex justify-center"><button type="submit" className="px-10 py-3 bg-white/10 text-white rounded-full flex gap-2"><span>归星</span><Star size={14}/></button></div>
+                                </form>
+                            </div>
+                         </div>
+                    )}
+
+                    {mode === AppMode.DIARY && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur-md z-50 animate-fade-in">
+                            <div className="w-full max-w-2xl h-[600px] glass-panel rounded-3xl flex flex-col relative border-indigo-500/30">
+                                <button onClick={() => setMode(AppMode.EXPLORE)} className="absolute top-6 right-6 text-white/30 hover:text-white"><X /></button>
+                                <div className="p-8 border-b border-white/10 bg-indigo-950/30"><h2 className="text-2xl font-mystic text-indigo-100">观察日志</h2></div>
+                                <div className="flex-1 overflow-y-auto p-8 space-y-8">
+                                    {diaryEntries.map(entry => (
+                                        <div key={entry.id} className="relative pl-8 border-l border-indigo-500/20">
+                                            <div className="text-xs text-indigo-300 font-mystic mb-2">{entry.date}</div>
+                                            <h3 className="text-xl text-white mb-3">{entry.title}</h3>
+                                            <p className="text-gray-300 italic">"{entry.content}"</p>
+                                        </div>
+                                    ))}
+                                    {diaryEntries.length === 0 && <div className="text-center text-gray-500 mt-20">暂无观测记录...</div>}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    
+                    <footer className="p-8 text-white/20 text-xs flex justify-between pointer-events-auto uppercase font-mystic">
+                        <div className="flex gap-4">
+                            <span>现实: {memories.filter(m => m.type === MemoryType.REAL).length}</span>
+                            <span>梦境: {memories.filter(m => m.type === MemoryType.DREAM).length}</span>
+                        </div>
+                    </footer>
+                </div>
+            );
+        };
+
+        // --- APP ROOT ---
+        const App = () => {
+            const [mode, setMode] = useState(AppMode.EXPLORE);
+            const [memories, setMemories] = useState([
+                { id: '1', content: '我飞过一座彩色玻璃城市，太阳落下化作黄金河流。', type: MemoryType.DREAM, emotion: 0.95, keywords: ['飞行','日落'], timestamp: Date.now(), position: [8, 5, 2] },
+                { id: '2', content: '周二图书馆的旧书味，灰尘在光中起舞。', type: MemoryType.REAL, emotion: 0.6, keywords: ['书籍','怀旧'], timestamp: Date.now(), position: [-6, 2, -1] },
+                { id: '3', content: '深渊的寂静，只有气泡的声音。', type: MemoryType.DREAM, emotion: 0.1, keywords: ['深渊'], timestamp: Date.now(), position: [5, -10, 5] }
+            ]);
+            const [activeMemory, setActiveMemory] = useState(null);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [atmosphere, setAtmosphere] = useState({ fogColor: '#020205', fogDensity: 0.012, ambientLightColor: '#111122', bloomStrength: 1.0 });
+            const [voiceEnergy, setVoiceEnergy] = useState(0);
+            const [isListening, setIsListening] = useState(false);
+            const [voiceTranscript, setVoiceTranscript] = useState('');
+            const [chatHistory, setChatHistory] = useState([{ id: 'init', sender: 'aurelia', text: '我是艾瑞莉亚。星辰正在聆听。', timestamp: Date.now() }]);
+            const [diaryEntries, setDiaryEntries] = useState([]);
+            const [stats, setStats] = useState({ dreamsRecorded: 1, realMemoriesRecorded: 1, totalMemories: 2 });
+            const [holidayMode, setHolidayMode] = useState(HolidayMode.NONE);
+
+            // Init Check
+            useEffect(() => {
+                const d = new Date();
+                if(d.getMonth()===11 && d.getDate() >= 21) setHolidayMode(HolidayMode.WINTER_SOLSTICE);
+            }, []);
+
+            // Audio Logic
+            const recognitionRef = useRef(null);
+            const audioCtxRef = useRef(null);
+
+            const toggleListening = async () => {
+                if(isListening) {
+                    setIsListening(false); setVoiceEnergy(0);
+                    if(recognitionRef.current) recognitionRef.current.stop();
+                    if(audioCtxRef.current) audioCtxRef.current.close();
+                } else {
+                    try {
+                        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                        audioCtxRef.current = ctx;
+                        const src = ctx.createMediaStreamSource(stream);
+                        const analyser = ctx.createAnalyser();
+                        analyser.fftSize = 256;
+                        src.connect(analyser);
+                        
+                        const updateEnergy = () => {
+                            if(ctx.state === 'closed') return;
+                            const data = new Uint8Array(analyser.frequencyBinCount);
+                            analyser.getByteFrequencyData(data);
+                            setVoiceEnergy(data.reduce((a,b)=>a+b,0)/data.length/255);
+                            requestAnimationFrame(updateEnergy);
+                        };
+                        updateEnergy();
+
+                        if('webkitSpeechRecognition' in window) {
+                            const rec = new window.webkitSpeechRecognition();
+                            rec.continuous = true; rec.interimResults = true; rec.lang = 'zh-CN';
+                            rec.onresult = (e) => {
+                                let final = '';
+                                for(let i=e.resultIndex; i<e.results.length; ++i) {
+                                    if(e.results[i].isFinal) final += e.results[i][0].transcript;
+                                    else setVoiceTranscript(e.results[i][0].transcript);
+                                }
+                                if(final) handleFinalSpeech(final);
+                            };
+                            rec.start();
+                            recognitionRef.current = rec;
+                        }
+                        setIsListening(true);
+                    } catch(e) { alert("无法访问麦克风"); }
+                }
+            };
+
+            const handleFinalSpeech = async (text) => {
+                setVoiceTranscript('');
+                if(mode === AppMode.VIEW_MEMORY && activeMemory) {
+                    const res = await geminiService.sculptMemory(activeMemory, text);
+                    setMemories(prev => prev.map(m => m.id===activeMemory.id ? {...m, visuals: {...m.visuals, ...res.visuals}} : m));
+                    setActiveMemory(prev => ({...prev, visuals: {...prev.visuals, ...res.visuals}}));
+                } else {
+                    const res = await geminiService.generateAtmosphere(text);
+                    setAtmosphere(res.atmosphere);
+                }
+            };
+
+            const handleSendMessage = async (text) => {
+                setChatHistory(p => [...p, { id: Date.now(), sender: 'user', text }]);
+                const res = await geminiService.chatWithAurelia(chatHistory, text);
+                setChatHistory(p => [...p, { id: Date.now()+1, sender: 'aurelia', text: res }]);
+            };
+
+            const handleAddMemory = async (text) => {
+                const analysis = await geminiService.analyzeMemoryEntry(text);
+                const isDream = analysis.type === MemoryType.DREAM;
+                const newMem = {
+                    id: Date.now().toString(), content: text, type: analysis.type, emotion: analysis.emotion, keywords: analysis.keywords,
+                    timestamp: Date.now(), position: [isDream ? (Math.random()*15+4) : -(Math.random()*15+4), (Math.random()*20)-5, (Math.random()*8)-4]
+                };
+                setMemories(p => [...p, newMem]);
+                const newStats = { ...stats, totalMemories: stats.totalMemories+1, dreamsRecorded: stats.dreamsRecorded+(isDream?1:0), realMemoriesRecorded: stats.realMemoriesRecorded+(!isDream?1:0) };
+                setStats(newStats);
+                if(Math.random()>0.7) {
+                    const entry = await geminiService.generateDiaryEntry(newStats);
+                    setDiaryEntries(p => [entry, ...p]);
+                }
+            };
+
+            return (
+                <div className="w-full h-full relative">
+                    <ButterflyScene memories={memories} onMemoryClick={(m)=>{setActiveMemory(m); setMode(AppMode.VIEW_MEMORY)}} onBackgroundClick={()=>{setActiveMemory(null); setMode(AppMode.EXPLORE)}} searchTerm={searchTerm} atmosphere={atmosphere} voiceEnergy={voiceEnergy} holidayMode={holidayMode} />
+                    <UIOverlay mode={mode} setMode={setMode} memories={memories} chatHistory={chatHistory} onSendMessage={handleSendMessage} onAddMemory={handleAddMemory} activeMemory={activeMemory} onCloseMemory={()=>{setActiveMemory(null); setMode(AppMode.EXPLORE)}} searchTerm={searchTerm} setSearchTerm={setSearchTerm} isListening={isListening} toggleListening={toggleListening} voiceTranscript={voiceTranscript} voiceEnergy={voiceEnergy} diaryEntries={diaryEntries} unseenDiaryCount={0} holidayMode={holidayMode} />
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
